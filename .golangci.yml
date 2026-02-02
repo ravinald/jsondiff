@@ -20,13 +20,11 @@ linters:
     - staticcheck
     - unused
     - misspell
-
-linters-settings:
-  gocritic:
-    disabled-checks:
-      - ifElseChain
+  settings:
+    gocritic:
+      disabled-checks:
+        - ifElseChain
 
 issues:
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
