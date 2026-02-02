@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "colors": {
+    "add": {
+      "foreground": {
+        "line": {
+          "hex": "#00ff00",
+          "ansi256": 10,
+          "ansi": 10
+        },
+        "inline": {
+          "hex": "#008000",
+          "ansi256": 2,
+          "ansi": 2
+        }
+      },
+      "background": {}
+    },
+    "remove": {
+      "foreground": {
+        "line": {
+          "hex": "#ff0000",
+          "ansi256": 9,
+          "ansi": 9
+        },
+        "inline": {
+          "hex": "#800000",
+          "ansi256": 1,
+          "ansi": 1
+        }
+      },
+      "background": {}
+    },
+    "ignored": {
+      "foreground": {
+        "hex": "#0000ff",
+        "ansi256": 12,
+        "ansi": 12
+      },
+      "background": {}
+    }
+  }
+}

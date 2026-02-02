@@ -1,0 +1,21 @@
+{
+  "id": "user-123",
+  "name": "Alice Smith",
+  "email": "alice@example.com",
+  "age": 30,
+  "address": {
+    "street": "123 Main St",
+    "city": "New York",
+    "state": "NY",
+    "zip": "10001"
+  },
+  "metadata": {
+    "created": "2023-01-01T10:00:00Z",
+    "updated": "2023-06-15T14:30:00Z",
+    "lastLogin": "2023-12-01T09:00:00Z"
+  },
+  "preferences": {
+    "theme": "dark",
+    "notifications": true
+  }
+}
