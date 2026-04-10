@@ -16,6 +16,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -147,17 +148,14 @@ func executeDiff(cfg *CLIConfig, file1Path, file2Path string, out io.Writer) err
 			// Try default config location
 			defaultPath := defaultConfigPath()
 			if defaultPath != "" {
-				if _, err := os.Stat(defaultPath); err == nil {
-					config, err := loadConfig(defaultPath)
-					if err != nil {
-						// Non-fatal: warn and continue with defaults
+				config, err := loadConfig(defaultPath)
+				if err != nil {
+					if !errors.Is(err, os.ErrNotExist) {
 						fmt.Fprintf(os.Stderr, "Warning: invalid config at %s: %v\n", defaultPath, err)
-						styles = jsondiff.DefaultStyles()
-					} else {
-						styles = jsondiff.StylesFromConfig(config)
 					}
-				} else {
 					styles = jsondiff.DefaultStyles()
+				} else {
+					styles = jsondiff.StylesFromConfig(config)
 				}
 			} else {
 				styles = jsondiff.DefaultStyles()

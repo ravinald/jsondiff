@@ -244,15 +244,10 @@ func (f *Formatter) groupDiffsByKey(diffs []DiffLine) [][]DiffLine {
 func extractJSONKey(line string) string {
 	trimmed := strings.TrimSpace(line)
 
-	// Handle lines with ~ prefix for ignored fields
-	var found bool
-	if trimmed, found = strings.CutPrefix(trimmed, "\"~"); !found {
-		if trimmed, found = strings.CutPrefix(trimmed, "~\""); !found {
-			if trimmed, found = strings.CutPrefix(trimmed, "\""); !found {
-				return ""
-			}
-		}
+	if !strings.HasPrefix(trimmed, "\"") {
+		return ""
 	}
+	trimmed = trimmed[1:] // skip opening quote
 
 	// Find the closing quote and colon
 	colonIndex := strings.Index(trimmed, "\":")
@@ -766,18 +761,21 @@ func padRight(s string, length int) string {
 }
 
 func stripANSI(s string) string {
-	// Simple ANSI escape sequence removal
 	var result strings.Builder
-	inEscape := false
-	for _, r := range s {
-		if r == '\x1b' {
-			inEscape = true
-		} else if inEscape {
-			if r == 'm' {
-				inEscape = false
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		if runes[i] == '\x1b' && i+1 < len(runes) && runes[i+1] == '[' {
+			i += 2 // skip ESC [
+			// Skip parameter bytes until the final byte (0x40-0x7E)
+			for i < len(runes) && (runes[i] < 0x40 || runes[i] > 0x7E) {
+				i++
 			}
+			// i now points at the final byte; the loop increment skips it
+		} else if runes[i] == '\x1b' {
+			// Non-CSI escape: skip ESC and the next byte
+			i++
 		} else {
-			result.WriteRune(r)
+			result.WriteRune(runes[i])
 		}
 	}
 	return result.String()
