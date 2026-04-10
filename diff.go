@@ -43,7 +43,6 @@
 package jsondiff
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -62,6 +61,11 @@ const (
 
 const (
 	defaultContextLines = 3
+	// DefaultMaxLines is the maximum number of formatted JSON lines allowed
+	// before the LCS diff algorithm refuses to proceed. This prevents
+	// O(m*n) memory exhaustion on large inputs. Set MaxLines in DiffOptions
+	// to override; 0 means use this default.
+	DefaultMaxLines = 100000
 )
 
 // Differ compares two JSON documents and returns differences.
@@ -90,6 +94,7 @@ type DiffOptions struct {
 	SortJSON      bool
 	IncludeFields []string // empty = all fields
 	ExcludeFields []string
+	MaxLines      int // 0 = DefaultMaxLines; -1 = no limit
 }
 
 // Diff compares two JSON documents and returns their differences.
@@ -139,6 +144,10 @@ func DiffWithContext(ctx context.Context, json1, json2 []byte, opts DiffOptions)
 		return nil, err
 	}
 
+	if err := checkLineLimit(len(lines1), len(lines2), opts.MaxLines); err != nil {
+		return nil, err
+	}
+
 	lcs := longestCommonSubsequence(lines1, lines2)
 	diffs := buildDiff(lines1, lines2, lcs)
 
@@ -158,22 +167,22 @@ func diffWithFilteringContext(ctx context.Context, json1, json2 []byte, opts Dif
 		return nil, fmt.Errorf("error parsing json2: %w", err)
 	}
 
-	// Mark ignored fields internally (with ~ prefix for tracking)
-	marked1, _ := markIgnoredFieldsInObjectSimple(obj1, opts.IncludeFields, opts.ExcludeFields, "")
-	marked2, _ := markIgnoredFieldsInObjectSimple(obj2, opts.IncludeFields, opts.ExcludeFields, "")
+	// Identify ignored paths without mutating the objects
+	_, ignoredPaths1 := markIgnoredFieldsInObjectSimple(obj1, opts.IncludeFields, opts.ExcludeFields, "")
+	_, ignoredPaths2 := markIgnoredFieldsInObjectSimple(obj2, opts.IncludeFields, opts.ExcludeFields, "")
 
 	// Sort if needed
 	if opts.SortJSON {
-		marked1 = sortJSONKeys(marked1)
-		marked2 = sortJSONKeys(marked2)
+		obj1 = sortJSONKeys(obj1)
+		obj2 = sortJSONKeys(obj2)
 	}
 
-	// Format to lines
-	lines1, err := formatJSONObject(marked1)
+	// Format to lines (unmodified JSON, no tilde markers)
+	lines1, err := formatJSONObject(obj1)
 	if err != nil {
 		return nil, fmt.Errorf("error formatting json1: %w", err)
 	}
-	lines2, err := formatJSONObject(marked2)
+	lines2, err := formatJSONObject(obj2)
 	if err != nil {
 		return nil, fmt.Errorf("error formatting json2: %w", err)
 	}
@@ -183,8 +192,14 @@ func diffWithFilteringContext(ctx context.Context, json1, json2 []byte, opts Dif
 		return nil, err
 	}
 
-	// Build special diff that handles ignored lines
-	diffs := buildFilteredDiff(lines1, lines2)
+	if err := checkLineLimit(len(lines1), len(lines2), opts.MaxLines); err != nil {
+		return nil, err
+	}
+
+	// Build diff using ignored paths to identify filtered lines
+	ignored1 := identifyIgnoredLinesByPath(lines1, ignoredPaths1)
+	ignored2 := identifyIgnoredLinesByPath(lines2, ignoredPaths2)
+	diffs := buildFilteredDiffWithIgnored(lines1, lines2, ignored1, ignored2)
 
 	return addContext(diffs, opts.ContextLines), nil
 }
@@ -209,9 +224,8 @@ func markIgnoredFieldsInObjectSimple(obj any, includeFields, excludeFields []str
 			}
 
 			if !shouldIncludeField(fieldPath, includeFields, excludeFields) {
-				// Mark with ~ for internal tracking only
 				ignoredPaths[fieldPath] = true
-				result["~"+key] = value
+				result[key] = value
 			} else {
 				// Recursively process nested objects
 				nestedObj, nestedIgnored := markIgnoredFieldsInObjectSimple(value, includeFields, excludeFields, fieldPath)
@@ -305,35 +319,21 @@ func formatJSONObject(obj any) ([]string, error) {
 		return nil, err
 	}
 
-	scanner := bufio.NewScanner(strings.NewReader(string(formatted)))
-	var lines []string
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
+	lines := strings.Split(strings.TrimRight(string(formatted), "\n"), "\n")
 
-	return lines, scanner.Err()
+	return lines, nil
 }
 
 // buildFilteredDiff creates diff with special handling for ignored fields (marked with ~)
-func buildFilteredDiff(lines1, lines2 []string) []DiffLine {
-	// Identify which lines contain ignored fields
-	ignored1 := identifyIgnoredLines(lines1)
-	ignored2 := identifyIgnoredLines(lines2)
+// buildFilteredDiffWithIgnored creates diff with ignored line tracking via pre-computed boolean slices
+func buildFilteredDiffWithIgnored(lines1, lines2 []string, ignored1, ignored2 []bool) []DiffLine {
+	lcs := longestCommonSubsequence(lines1, lines2)
+	diffs := buildDiff(lines1, lines2, lcs)
 
-	// Clean the ~ markers for comparison
-	cleaned1 := cleanIgnoredMarkers(lines1)
-	cleaned2 := cleanIgnoredMarkers(lines2)
-
-	// Build diff using cleaned lines
-	lcs := longestCommonSubsequence(cleaned1, cleaned2)
-	diffs := buildDiff(cleaned1, cleaned2, lcs)
-
-	// Process diffs to mark ignored and restore clean content
 	for i := range diffs {
 		lineNum1 := diffs[i].LineNum1
 		lineNum2 := diffs[i].LineNum2
 
-		// Check if line is ignored
 		isIgnored := false
 		if lineNum1 > 0 && lineNum1 <= len(ignored1) {
 			isIgnored = isIgnored || ignored1[lineNum1-1]
@@ -343,91 +343,108 @@ func buildFilteredDiff(lines1, lines2 []string) []DiffLine {
 		}
 
 		diffs[i].IsIgnored = isIgnored
-
-		// Use the cleaned content (without ~ in keys) for display
-		if diffs[i].Type == DiffTypeRemoved && lineNum1 > 0 {
-			diffs[i].Content = cleaned1[lineNum1-1]
-		} else if diffs[i].Type == DiffTypeAdded && lineNum2 > 0 {
-			diffs[i].Content = cleaned2[lineNum2-1]
-		} else if diffs[i].Type == DiffTypeEqual && lineNum1 > 0 {
-			diffs[i].Content = cleaned1[lineNum1-1]
-		} else if diffs[i].Type == DiffTypeEqual && lineNum2 > 0 {
-			diffs[i].Content = cleaned2[lineNum2-1]
-		}
 	}
 
 	return diffs
 }
 
-// identifyIgnoredLines returns a boolean slice indicating which lines contain ignored fields
-func identifyIgnoredLines(lines []string) []bool {
+type fieldStackEntry struct {
+	key string
+}
+
+// identifyIgnoredLinesByPath walks formatted JSON lines and marks lines belonging
+// to ignored field paths. It tracks the current path by parsing indentation and
+// key names from json.MarshalIndent output (2-space indent).
+func identifyIgnoredLinesByPath(lines []string, ignoredPaths map[string]bool) []bool {
+	if len(ignoredPaths) == 0 {
+		return make([]bool, len(lines))
+	}
+
 	ignored := make([]bool, len(lines))
-	insideIgnored := 0 // Track nesting level inside ignored objects/arrays
+	var stack []fieldStackEntry
+	insideIgnoredDepth := 0
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
-		// Check if this line starts an ignored field
-		if containsIgnoredField(line) {
+		// If inside an ignored subtree, mark and track nesting
+		if insideIgnoredDepth > 0 {
 			ignored[i] = true
-			// If this line opens an object or array, track nesting
-			if strings.HasSuffix(trimmed, "{") || strings.HasSuffix(trimmed, "[") {
-				insideIgnored++
+			trimmedNoComma := strings.TrimRight(trimmed, ",")
+			if strings.HasSuffix(trimmedNoComma, "{") || strings.HasSuffix(trimmedNoComma, "[") {
+				insideIgnoredDepth++
+			}
+			if strings.HasPrefix(trimmed, "}") || strings.HasPrefix(trimmed, "]") {
+				insideIgnoredDepth--
 			}
 			continue
 		}
 
-		// If we're inside an ignored object/array, this line is also ignored
-		if insideIgnored > 0 {
-			ignored[i] = true
+		// Check for closing brace/bracket -- pop the stack
+		if strings.HasPrefix(trimmed, "}") || strings.HasPrefix(trimmed, "]") {
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+			continue
+		}
 
-			// Track nesting changes
-			if strings.HasSuffix(trimmed, "{") || strings.HasSuffix(trimmed, "[") {
-				insideIgnored++
-			} else if strings.HasPrefix(trimmed, "}") || strings.HasPrefix(trimmed, "]") {
-				insideIgnored--
+		// Try to extract a key name from this line
+		key := extractKeyFromLine(trimmed)
+		if key != "" {
+			path := buildFieldPath(stack, key)
+
+			if ignoredPaths[path] {
+				ignored[i] = true
+				trimmedNoComma := strings.TrimRight(trimmed, ",")
+				if strings.HasSuffix(trimmedNoComma, "{") || strings.HasSuffix(trimmedNoComma, "[") {
+					insideIgnoredDepth = 1
+				}
+				continue
+			}
+
+			// If this line opens a nested object/array, push to stack
+			trimmedNoComma := strings.TrimRight(trimmed, ",")
+			if strings.HasSuffix(trimmedNoComma, "{") || strings.HasSuffix(trimmedNoComma, "[") {
+				stack = append(stack, fieldStackEntry{key: key})
+			}
+		} else {
+			trimmedNoComma := strings.TrimRight(trimmed, ",")
+			if strings.HasSuffix(trimmedNoComma, "{") || strings.HasSuffix(trimmedNoComma, "[") {
+				stack = append(stack, fieldStackEntry{key: ""})
 			}
 		}
 	}
+
 	return ignored
 }
 
-// cleanIgnoredMarkers removes ~ markers from field names for comparison
-func cleanIgnoredMarkers(lines []string) []string {
-	cleaned := make([]string, len(lines))
-	for i, line := range lines {
-		// Remove ~ from field names like "~fieldname": or ~"fieldname":
-		cleaned[i] = strings.ReplaceAll(line, "\"~", "\"")
-		cleaned[i] = strings.ReplaceAll(cleaned[i], "~\"", "\"")
+// extractKeyFromLine extracts the JSON key from a json.MarshalIndent line like `  "key": value`
+func extractKeyFromLine(trimmed string) string {
+	if !strings.HasPrefix(trimmed, "\"") {
+		return ""
 	}
-	return cleaned
+	end := strings.Index(trimmed[1:], "\"")
+	if end < 0 {
+		return ""
+	}
+	key := trimmed[1 : end+1]
+	rest := trimmed[end+2:]
+	if !strings.HasPrefix(rest, ":") {
+		return ""
+	}
+	return key
 }
 
-// containsIgnoredField checks if a line contains an ignored field marker
-func containsIgnoredField(line string) bool {
-	// Check for field names starting with ~
-	// This matches patterns like:  "~fieldname": value
-	trimmed := strings.TrimSpace(line)
-
-	// Look for patterns that indicate a field name with ~
-	// 1. "~fieldname": - field name starts with ~
-	// 2. ~"fieldname": - alternative format
-	if strings.HasPrefix(trimmed, "\"~") || strings.HasPrefix(trimmed, "~\"") {
-		return true
+// buildFieldPath constructs a dotted path from the stack and current key
+func buildFieldPath(stack []fieldStackEntry, key string) string {
+	var parts []string
+	for _, e := range stack {
+		if e.key != "" {
+			parts = append(parts, e.key)
+		}
 	}
-
-	// Check for "~field": pattern in the middle of the line (for inline fields)
-	// But make sure it's followed by a colon to indicate it's a field name
-	idx := strings.Index(trimmed, "\"~")
-	if idx > 0 {
-		// Found "~ pattern, check if it's followed by ":
-		afterTilde := trimmed[idx+2:]
-		colonIdx := strings.Index(afterTilde, "\":")
-		// It's a field if we find ": after the field name
-		return colonIdx > 0 && colonIdx < len(afterTilde)-2
-	}
-
-	return false
+	parts = append(parts, key)
+	return strings.Join(parts, ".")
 }
 
 func formatJSONLines(data []byte, sortKeys bool) ([]string, error) {
@@ -445,13 +462,9 @@ func formatJSONLines(data []byte, sortKeys bool) ([]string, error) {
 		return nil, err
 	}
 
-	scanner := bufio.NewScanner(strings.NewReader(string(formatted)))
-	var lines []string
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
+	lines := strings.Split(strings.TrimRight(string(formatted), "\n"), "\n")
 
-	return lines, scanner.Err()
+	return lines, nil
 }
 
 func sortJSONKeys(v any) any {
@@ -475,6 +488,24 @@ func sortJSONKeys(v any) any {
 	default:
 		return v
 	}
+}
+
+func checkLineLimit(len1, len2, maxLines int) error {
+	limit := maxLines
+	if limit == 0 {
+		limit = DefaultMaxLines
+	}
+	if limit < 0 {
+		return nil
+	}
+	if len1 > limit || len2 > limit {
+		larger := len1
+		if len2 > larger {
+			larger = len2
+		}
+		return fmt.Errorf("input too large: %d lines exceeds limit of %d (set MaxLines to increase or -1 to disable)", larger, limit)
+	}
+	return nil
 }
 
 func longestCommonSubsequence(lines1, lines2 []string) [][]int {

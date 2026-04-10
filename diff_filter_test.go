@@ -322,11 +322,13 @@ func TestDiffWithComplexFiltering(t *testing.T) {
 	}
 }
 
-func TestBuildFilteredDiff(t *testing.T) {
+func TestBuildFilteredDiffWithIgnored(t *testing.T) {
 	tests := []struct {
 		name      string
 		lines1    []string
 		lines2    []string
+		ignored1  []bool
+		ignored2  []bool
 		expectLen int
 	}{
 		{
@@ -339,71 +341,115 @@ func TestBuildFilteredDiff(t *testing.T) {
 				`"name": "Bob"`,
 				`"age": 31`,
 			},
-			expectLen: 4, // 2 removals + 2 additions
+			ignored1:  []bool{false, false},
+			ignored2:  []bool{false, false},
+			expectLen: 4,
 		},
 		{
 			name: "Mix of regular and ignored",
 			lines1: []string{
 				`"name": "Alice"`,
-				`"~timestamp": "2023-01-01"`,
+				`"timestamp": "2023-01-01"`,
 			},
 			lines2: []string{
 				`"name": "Bob"`,
-				`"~timestamp": "2023-01-02"`,
+				`"timestamp": "2023-01-02"`,
 			},
-			expectLen: 3, // 1 removal + 1 addition + 1 ignored
+			ignored1:  []bool{false, true},
+			ignored2:  []bool{false, true},
+			expectLen: 3,
 		},
 		{
 			name: "All ignored lines",
 			lines1: []string{
-				`"~field1": "value1"`,
-				`"~field2": "value2"`,
+				`"field1": "value1"`,
+				`"field2": "value2"`,
 			},
 			lines2: []string{
-				`"~field1": "value1"`,
-				`"~field2": "value2"`,
+				`"field1": "value1"`,
+				`"field2": "value2"`,
 			},
-			expectLen: 2, // 2 ignored lines shown as equal
+			ignored1:  []bool{true, true},
+			ignored2:  []bool{true, true},
+			expectLen: 2,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			diffs := buildFilteredDiff(tt.lines1, tt.lines2)
+			diffs := buildFilteredDiffWithIgnored(tt.lines1, tt.lines2, tt.ignored1, tt.ignored2)
 
 			if len(diffs) < tt.expectLen {
 				t.Errorf("Expected at least %d diff lines, got %d", tt.expectLen, len(diffs))
-			}
-
-			// Check that ignored lines are properly marked
-			for _, diff := range diffs {
-				if strings.Contains(diff.Content, "~") && !diff.IsIgnored {
-					t.Error("Line with ~ should be marked as ignored")
-				}
 			}
 		})
 	}
 }
 
-func TestContainsIgnoredField(t *testing.T) {
+func TestIdentifyIgnoredLinesByPath(t *testing.T) {
 	tests := []struct {
-		line     string
-		expected bool
+		name         string
+		lines        []string
+		ignoredPaths map[string]bool
+		expected     []bool
 	}{
-		{`"~field": "value"`, true},
-		{`  "~nested": {`, true},
-		{`~"field": "value"`, true},
-		{`"field": "value"`, false},
-		{`"field": "~value"`, false}, // ~ in value, not field name
-		{`  "normalField": "value"`, false},
-		{`}`, false},
+		{
+			name: "Simple ignored field",
+			lines: []string{
+				`{`,
+				`  "name": "Alice",`,
+				`  "timestamp": "2023-01-01"`,
+				`}`,
+			},
+			ignoredPaths: map[string]bool{"timestamp": true},
+			expected:     []bool{false, false, true, false},
+		},
+		{
+			name: "No ignored fields",
+			lines: []string{
+				`{`,
+				`  "name": "Alice"`,
+				`}`,
+			},
+			ignoredPaths: map[string]bool{},
+			expected:     []bool{false, false, false},
+		},
+		{
+			name: "Nested ignored object",
+			lines: []string{
+				`{`,
+				`  "name": "Alice",`,
+				`  "metadata": {`,
+				`    "created": "2023-01-01"`,
+				`  }`,
+				`}`,
+			},
+			ignoredPaths: map[string]bool{"metadata": true},
+			expected:     []bool{false, false, true, true, true, false},
+		},
+		{
+			name: "Tilde in key name is not special",
+			lines: []string{
+				`{`,
+				`  "~price": 9.99,`,
+				`  "name": "item"`,
+				`}`,
+			},
+			ignoredPaths: map[string]bool{},
+			expected:     []bool{false, false, false, false},
+		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.line, func(t *testing.T) {
-			result := containsIgnoredField(tt.line)
-			if result != tt.expected {
-				t.Errorf("containsIgnoredField(%q) = %v, want %v", tt.line, result, tt.expected)
+		t.Run(tt.name, func(t *testing.T) {
+			result := identifyIgnoredLinesByPath(tt.lines, tt.ignoredPaths)
+			if len(result) != len(tt.expected) {
+				t.Fatalf("length mismatch: got %d, want %d", len(result), len(tt.expected))
+			}
+			for i := range result {
+				if result[i] != tt.expected[i] {
+					t.Errorf("line %d: got ignored=%v, want %v (line: %s)", i, result[i], tt.expected[i], tt.lines[i])
+				}
 			}
 		})
 	}

@@ -56,13 +56,13 @@ func TestFormatterWithIgnoredFields(t *testing.T) {
 			expectColor:  true,
 		},
 		{
-			name: "Ignored field already with tilde",
+			name: "Ignored field with clean content",
 			diffs: []DiffLine{
 				{
 					Type:      DiffTypeEqual,
 					LineNum1:  3,
 					LineNum2:  3,
-					Content:   `~"timestamp": "2023-01-01"`,
+					Content:   `"timestamp": "2023-01-01"`,
 					IsIgnored: true,
 				},
 			},
@@ -127,7 +127,7 @@ func TestFormatSideBySideWithIgnored(t *testing.T) {
 			Type:      DiffTypeEqual,
 			LineNum1:  2,
 			LineNum2:  2,
-			Content:   `  "~timestamp": "2023-01-01"`,
+			Content:   `  "timestamp": "2023-01-01"`,
 			IsIgnored: true,
 		},
 		{
