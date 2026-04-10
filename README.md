@@ -262,7 +262,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/ravinald/jsondiff/pkg/jsondiff"
+    "github.com/ravinald/jsondiff"
 )
 
 func main() {

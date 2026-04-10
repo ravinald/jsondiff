@@ -26,7 +26,7 @@ import (
 	flag "github.com/spf13/pflag"
 	"golang.org/x/term"
 
-	"github.com/ravinald/jsondiff/pkg/jsondiff"
+	"github.com/ravinald/jsondiff"
 )
 
 // CLIConfig holds all CLI configuration options.
