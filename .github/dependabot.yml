@@ -13,3 +13,10 @@ updates:
       interval: weekly
     commit-message:
       prefix: "ci"
+    groups:
+      # codeql-action ships init/autobuild/analyze as separate action paths that
+      # must run the same version; ungrouped, Dependabot bumps one and the
+      # analyze job fails on a config/runtime version mismatch.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
