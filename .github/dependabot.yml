@@ -6,6 +6,10 @@ updates:
       interval: weekly
     commit-message:
       prefix: "deps"
+    groups:
+      go-deps:
+        patterns:
+          - "*"
 
   - package-ecosystem: github-actions
     directory: /
@@ -20,3 +24,6 @@ updates:
       codeql-action:
         patterns:
           - "github/codeql-action*"
+      actions:
+        patterns:
+          - "*"

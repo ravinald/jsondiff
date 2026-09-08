@@ -59,3 +59,17 @@ jobs:
         uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9
         with:
           version: latest
+
+  # One stable context for branch protection to require. The test job's name
+  # carries its matrix values ("Test (Go 1.25.x)"), so requiring the real job
+  # names means the day the matrix moves to 1.27.x the required check never
+  # reports and every pull request blocks with no failure to point at.
+  ci-ok:
+    name: ci-ok
+    needs: [test, lint]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any job did not succeed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
